@@ -169,6 +169,32 @@ class TestVolvoSafetyBase(common.CarSafetyTest):
     self.assertTrue(self.safety.get_gas_pressed_prev(),
                     f"gas not flagged above {self.GAS_PRESSED_THRESHOLD}")
 
+  def test_gas_threshold_edge(self):
+    """
+    gas_pressed is strictly above GAS_PRESSED_THRESHOLD: half the threshold and
+    the threshold itself read as released, one DBC step above reads as pressed.
+    Kills the volvo.h scaling mutants (e.g. SPA's percent factor applied as a
+    division) that the 0 / threshold + 1 checks above can't see.
+    """
+    for gas in (self.GAS_PRESSED_THRESHOLD / 2, self.GAS_PRESSED_THRESHOLD):
+      self._rx(self._user_gas_msg(gas))
+      self.assertFalse(self.safety.get_gas_pressed_prev(), f"gas flagged at {gas}")
+    self._rx(self._user_gas_msg(self.GAS_PRESSED_THRESHOLD + self.GAS_LSB))
+    self.assertTrue(self.safety.get_gas_pressed_prev(),
+                    f"gas not flagged one step above {self.GAS_PRESSED_THRESHOLD}")
+
+  def test_vehicle_speed_measured(self):
+    """
+    The panda's vehicle speed matches what SPEED carries, to within one LSB.
+    The scale check below only compares constants; this exercises volvo.h's
+    conversion and UPDATE_VEHICLE_SPEED.
+    """
+    for speed in (0.0, 5.0, 20.0, 35.0):
+      for _ in range(6):  # fill the sample buffer (MAX_SAMPLE_VALS) so min and max both settle
+        self._rx(self._speed_msg(speed))
+      self.assertAlmostEqual(self.safety.get_vehicle_speed_max(), speed, delta=VOLVO_SPEED_TO_MS)
+      self.assertAlmostEqual(self.safety.get_vehicle_speed_min(), speed, delta=VOLVO_SPEED_TO_MS)
+
   def test_speed_scale_self_consistent(self):
     """
     The main-bus SPEED LSB is written out in three places: volvo.h, carstate.py
@@ -199,6 +225,7 @@ class TestVolvoCMA(TestVolvoSafetyBase):
   SAFETY_PARAM = 0
   PT_DBC = "volvo_front_1_cma"
   GAS_PRESSED_THRESHOLD = 21  # raw counts
+  GAS_LSB = 1
 
   def _user_gas_msg(self, gas):
     values = {"ACCELERATOR_PEDAL_POS": gas}
@@ -225,6 +252,7 @@ class TestVolvoSPA(TestVolvoSafetyBase):
   SAFETY_PARAM = VOLVO_FLAG_SPA
   PT_DBC = "volvo_front_1_spa"
   GAS_PRESSED_THRESHOLD = 1.0  # percent
+  GAS_LSB = 0.00390625  # DBC factor
 
   def _user_gas_msg(self, gas):
     values = {"ACCELERATOR_PEDAL_POS": gas}
